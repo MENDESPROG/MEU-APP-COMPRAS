@@ -35,6 +35,13 @@ def conectar_banco():
     conn.commit()
     return conn, cursor
 
+# Função específica para deletar um item do banco pelo ID
+def deletar_item(id_item):
+    conn, cursor = conectar_banco()
+    cursor.execute("DELETE FROM compras WHERE id = ?", (int(id_item),))
+    conn.commit()
+    conn.close()
+
 # --- 2. INTERFACE DO APLICATIVO (STREAMLIT) ---
 st.set_page_config(page_title="Controle de Compras", page_icon="🛒", layout="centered")
 
@@ -74,7 +81,6 @@ if botao_cadastrar:
         conn.commit()
         conn.close()
         st.success(f"✓ '{produto}' salvo com sucesso no banco de dados!")
-        # Recarrega a página para atualizar o histórico abaixo
         st.rerun()
 
 # --- 4. EXIBIÇÃO DO HISTÓRICO E MÉTRICAS ---
@@ -82,7 +88,7 @@ st.write("---")
 st.subheader("📊 Histórico de Compras Cadastradas")
 
 conn, cursor = conectar_banco()
-# Carrega os dados diretamente em um DataFrame do Pandas para facilitar o manuseio
+# Carrega os dados diretamente em um DataFrame do Pandas
 df = pd.read_sql_query("SELECT * FROM compras ORDER BY data_compra DESC", conn)
 conn.close()
 
@@ -105,6 +111,28 @@ if not df.empty:
         'data_compra': 'Data'
     })
     
-    st.dataframe(df_exibicao[['ID', 'Produto', 'Preço Unitário', 'Qtd', 'Total', 'Categoria', 'Supermercado', 'Data']], hide_index=True)
+    # Mensagem de ajuda para o usuário saber como apagar
+    st.info("💡 **Como apagar um item:** Clique na bordinha esquerda da linha para selecioná-la e aperte a tecla **Delete** no seu teclado (ou clique no ícone de lixeira que aparecer).")
+    
+    # Tabela Interativa (Permite deletar linhas)
+    dados_editados = st.data_editor(
+        df_exibicao[['ID', 'Produto', 'Preço Unitário', 'Qtd', 'Total', 'Categoria', 'Supermercado', 'Data']],
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        disabled=["ID", "Produto", "Preço Unitário", "Qtd", "Total", "Categoria", "Supermercado", "Data"] # Apenas deletar é permitido, editar texto não
+    )
+    
+    # Lógica que detecta se uma linha foi removida pelo usuário
+    if len(dados_editados) < len(df_exibicao):
+        ids_antes = set(df_exibicao['ID'])
+        ids_depois = set(dados_editados['ID'])
+        ids_deletados = ids_antes - ids_depois
+        
+        for id_deletado in ids_deletados:
+            deletar_item(id_deletado)
+            
+        st.success("Item removido com sucesso!")
+        st.rerun()
 else:
     st.info("Nenhuma compra cadastrada ainda. Comece preenchendo o formulário acima!")
