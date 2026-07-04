@@ -1,6 +1,7 @@
 import datetime
 import pandas as pd
 import streamlit as st
+import uuid  # Adicionado para tratar o formato de ID aceito pelo banco
 from supabase import create_client, Client
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -36,7 +37,6 @@ if st.session_state["usuario_email"] is None:
                 st.warning("Por favor, preencha todos os campos.")
             else:
                 try:
-                    # Busca o usuário na nossa tabela customizada
                     busca = supabase.table("usuarios_app").select("*").eq("email", email).eq("senha", senha).execute()
                     if busca.data:
                         st.session_state["usuario_email"] = email
@@ -58,11 +58,9 @@ if st.session_state["usuario_email"] is None:
                 st.error("A senha deve ter pelo menos 6 caracteres.")
             else:
                 try:
-                    # Tenta inserir o novo usuário na tabela customizada
                     dados_usuario = {"email": novo_email, "senha": nova_senha}
                     supabase.table("usuarios_app").insert(dados_usuario).execute()
                     
-                    # Loga o usuário automaticamente
                     st.session_state["usuario_email"] = novo_email
                     st.success("✨ Conta criada com sucesso!")
                     st.rerun()
@@ -75,10 +73,12 @@ if st.session_state["usuario_email"] is None:
     st.stop()
 
 # --- 5. PAINEL DO USUÁRIO AUTENTICADO ---
-usuario_atual = st.session_state["usuario_email"]
+email_texto = st.session_state["usuario_email"]
+# Transforma o e-mail em um formato UUID fixo e estável para a tabela "compras" aceitar sem erros
+usuario_atual = str(uuid.uuid5(uuid.NAMESPACE_DNS, email_texto)) if email_texto else None
 
 with st.sidebar:
-    st.write(f"Conectado como: \n**{usuario_atual}**")
+    st.write(f"Conectado como: \n**{st.session_state['usuario_email']}**")
     if st.button("Sair / Mudar de Conta", use_container_width=True):
         st.session_state["usuario_email"] = None
         st.rerun()
@@ -88,7 +88,7 @@ st.write("Preencha os campos abaixo para registrar seus gastos diretamente na su
 
 categorias_validas = ["Mercearia", "Hortifrúti", "Açougue", "Limpeza", "Higiene", "Bebidas", "Outros"]
 
-# --- 6. FORMULÁRIO DE CADASTRO ---
+# --- 6. FORMULÁRIO DE CADASTRO DE COMPRA ---
 with st.form("formulario_compra", clear_on_submit=True):
     col1, col2 = st.columns(2)
     
@@ -115,7 +115,7 @@ if botao_cadastrar:
             "categoria": categoria,
             "supermercado": supermercado,
             "data_compra": str(data_compra),
-            "user_id": usuario_atual  # Armazena o e-mail do usuário como identificador único
+            "user_id": usuario_atual
         }
         
         try:
