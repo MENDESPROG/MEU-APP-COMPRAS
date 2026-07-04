@@ -1,58 +1,96 @@
-import os
-import sqlite3
 import datetime
+import pandas as pd
+import streamlit as st
+from supabase import create_client, Client
 
-try:
-    import streamlit as st  # type: ignore[import]
-except ImportError as e:
-    raise ImportError(
-        "O módulo 'streamlit' não está instalado. Execute 'pip install streamlit' e tente novamente."
-    ) from e
-
-try:
-    import pandas as pd  # type: ignore[import]
-except ImportError as e:
-    raise ImportError(
-        "O módulo 'pandas' não está instalado. Execute 'pip install pandas' e tente novamente."
-    ) from e
-
-# --- 1. CONFIGURAÇÃO DO BANCO DE DADOS (SQLITE) ---
-def conectar_banco():
-    db_path = os.path.join(os.path.dirname(__file__), "historico_compras.db")
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS compras (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            produto TEXT,
-            valor_unitario REAL,
-            quantidade INTEGER,
-            categoria TEXT,
-            supermercado TEXT,
-            data_compra TEXT
-        )
-    """)
-    conn.commit()
-    return conn, cursor
-
-# Função específica para deletar um item do banco pelo ID
-def deletar_item(id_item):
-    conn, cursor = conectar_banco()
-    cursor.execute("DELETE FROM compras WHERE id = ?", (int(id_item),))
-    conn.commit()
-    conn.close()
-
-# --- 2. INTERFACE DO APLICATIVO (STREAMLIT) ---
+# --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(page_title="Controle de Compras", page_icon="🛒", layout="centered")
 
-st.title("🛒 Histórico de Compras Inteligente")
-st.write("Preencha os campos abaixo para registrar seus gastos.")
+# --- 2. CONEXÃO COM O SUPABASE ---
+SUPABASE_URL = "https://cdavsoxdjphqbqyglpme.supabase.co"
+SUPABASE_KEY = "sb_publishable_IfkGaoejXNbnb12BHW5InA_REiKH90t"
 
-# Listas de opções fixas
+@st.cache_resource
+def inicializar_supabase() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = inicializar_supabase()
+
+# --- 3. GERENCIAMENTO DE SESSÃO / AUTENTICAÇÃO ---
+def obter_usuario_logado():
+    try:
+        resposta = supabase.auth.get_user()
+        if resposta and hasattr(resposta, 'user') and resposta.user:
+            return resposta.user
+    except Exception:
+        return None
+    return None
+
+usuario = obter_usuario_logado()
+
+# --- 4. NOVA TELA DE LOGIN (E-MAIL E SENHA) ---
+if usuario is None:
+    st.title("🔐 Acesse seu Controle de Compras")
+    st.write("Faça login ou crie uma conta rápida abaixo para gerenciar seus gastos.")
+    
+    # Cria duas abas limpas na tela: uma para entrar e outra para se cadastrar
+    aba_login, aba_cadastro = st.tabs(["Entrar na Conta", "Criar Nova Conta"])
+    
+    with aba_login:
+        email = st.text_input("E-mail:", placeholder="seu@email.com", key="login_email")
+        senha = st.text_input("Senha:", type="password", key="login_senha")
+        
+        if st.button("Entrar", use_container_width=True):
+            if not email or not senha:
+                st.warning("Por favor, preencha todos os campos.")
+            else:
+                try:
+                    supabase.auth.sign_in_with_password({"email": email, "password": senha})
+                    st.success("✓ Login realizado com sucesso!")
+                    st.rerun()  # Recarrega o app já autenticado
+                except Exception as e:
+                    st.error("E-mail ou senha incorretos. Tente novamente.")
+                
+    with aba_cadastro:
+        novo_email = st.text_input("Escolha um E-mail:", placeholder="exemplo@email.com", key="reg_email")
+        nova_senha = st.text_input("Escolha uma Senha (mín. 6 dígitos):", type="password", key="reg_senha")
+        
+        if st.button("Cadastrar e Entrar", use_container_width=True):
+            if not novo_email or not nova_senha:
+                st.warning("Por favor, preencha todos os campos para o cadastro.")
+            elif len(nova_senha) < 6:
+                st.error("A senha deve ter pelo menos 6 caracteres.")
+            else:
+                try:
+                    # Cadastra o usuário no Supabase Auth
+                    supabase.auth.sign_up({"email": novo_email, "password": nova_senha})
+                    st.success("✨ Conta criada com sucesso!")
+                    
+                    # Tenta logar automaticamente após cadastrar
+                    supabase.auth.sign_in_with_password({"email": novo_email, "password": nova_senha})
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao cadastrar: {e}")
+                
+    st.stop()  # Impede que o restante do app execute se não estiver logado
+
+# --- 5. PAINEL DO USUÁRIO AUTENTICADO ---
+with st.sidebar:
+    if usuario and hasattr(usuario, 'email'):
+        st.write(f"Conectado como: \n**{usuario.email}**")
+    else:
+        st.write("Usuário conectado")
+        
+    if st.button("Sair / Mudar de Conta", use_container_width=True):
+        supabase.auth.sign_out()
+        st.rerun()
+
+st.title("🛒 Meu Histórico de Compras Inteligente")
+st.write("Preencha os campos abaixo para registrar seus gastos diretamente na sua conta.")
+
 categorias_validas = ["Mercearia", "Hortifrúti", "Açougue", "Limpeza", "Higiene", "Bebidas", "Outros"]
-supermercados_validos = ["Mercado do Bairro", "Hipermercado Centro", "Atacadão", "Outro"]
 
-# Criação do Formulário na Tela
+# --- 6. FORMULÁRIO DE CADASTRO ---
 with st.form("formulario_compra", clear_on_submit=True):
     col1, col2 = st.columns(2)
     
@@ -63,40 +101,47 @@ with st.form("formulario_compra", clear_on_submit=True):
         
     with col2:
         categoria = st.selectbox("Classe / Categoria:", categorias_validas)
-        supermercado = st.text_input("Supermercado:", placeholder="Ex: Carrefour, Mercadinho do Zé")
-        data_compra = st.date_input("Data da Compra:", datetime.datetime.today())
+        supermercado = st.text_input("Supermercado:", placeholder="Ex: Carrefour, Mercadinho")
+        data_compra = st.date_input("Data da Compra:", datetime.date.today())
 
     botao_cadastrar = st.form_submit_button("Cadastrar Compra")
 
-# --- 3. LÓGICA DE SALVAMENTO NO BANCO ---
 if botao_cadastrar:
     if produto.strip() == "":
         st.error("Por favor, digite o nome do produto!")
     else:
-        conn, cursor = conectar_banco()
-        cursor.execute("""
-            INSERT INTO compras (produto, valor_unitario, quantidade, categoria, supermercado, data_compra)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (produto, valor_unitario, quantidade, categoria, supermercado, str(data_compra)))
-        conn.commit()
-        conn.close()
-        st.success(f"✓ '{produto}' salvo com sucesso no banco de dados!")
-        st.rerun()
+        dados_compra = {
+            "produto": produto,
+            "valor_unitario": valor_unitario,
+            "quantidade": quantidade,
+            "categoria": categoria,
+            "supermercado": supermercado,
+            "data_compra": str(data_compra),
+            "user_id": usuario.id
+        }
+        
+        try:
+            supabase.table("compras").insert(dados_compra).execute()
+            st.success(f"✓ '{produto}' salvo com sucesso!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Erro ao salvar no Supabase: {e}")
 
-# --- 4. EXIBIÇÃO DO HISTÓRICO E MÉTRICAS ---
+# --- 7. EXIBIÇÃO DO HISTÓRICO PERSONALIZADO ---
 st.write("---")
-st.subheader("📊 Histórico de Compras Cadastradas")
+st.subheader("📊 Meu Histórico de Compras")
 
-conn, cursor = conectar_banco()
-# Carrega os dados diretamente em um DataFrame do Pandas
-df = pd.read_sql_query("SELECT * FROM compras ORDER BY data_compra DESC", conn)
-conn.close()
+try:
+    resposta = supabase.table("compras").select("*").eq("user_id", usuario.id).order("data_compra", desc=True).execute()
+    dados_banco = resposta.data
+except Exception as e:
+    st.error(f"Erro ao buscar dados do Supabase: {e}")
+    dados_banco = []
+
+df = pd.DataFrame(dados_banco)
 
 if not df.empty:
-    # Calcula o valor total de cada linha para as métricas
     df['Total'] = df['valor_unitario'] * df['quantidade']
-    
-    # Exibe métricas rápidas
     total_gasto = df['Total'].sum()
     total_itens = df['quantidade'].sum()
     
@@ -104,35 +149,34 @@ if not df.empty:
     col_m1.metric("Total Investido", f"R$ {total_gasto:.2f}")
     col_m2.metric("Qtd. Itens Comprados", f"{total_itens} un.")
     
-    # Formatação amigável para exibição na tabela
     df_exibicao = df.rename(columns={
         'id': 'ID', 'produto': 'Produto', 'valor_unitario': 'Preço Unitário',
         'quantidade': 'Qtd', 'categoria': 'Categoria', 'supermercado': 'Supermercado',
         'data_compra': 'Data'
     })
     
-    # Mensagem de ajuda para o usuário saber como apagar
-    st.info("💡 **Como apagar um item:** Clique na bordinha esquerda da linha para selecioná-la e aperte a tecla **Delete** no seu teclado (ou clique no ícone de lixeira que aparecer).")
+    st.info("💡 **Como apagar um item:** Selecione a linha desejada na tabela abaixo e aperte a tecla **Delete**.")
     
-    # Tabela Interativa (Permite deletar linhas)
     dados_editados = st.data_editor(
         df_exibicao[['ID', 'Produto', 'Preço Unitário', 'Qtd', 'Total', 'Categoria', 'Supermercado', 'Data']],
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
-        disabled=["ID", "Produto", "Preço Unitário", "Qtd", "Total", "Categoria", "Supermercado", "Data"] # Apenas deletar é permitido, editar texto não
+        disabled=["ID", "Produto", "Preço Unitário", "Qtd", "Total", "Categoria", "Supermercado", "Data"],
+        key="editor_compras"
     )
     
-    # Lógica que detecta se uma linha foi removida pelo usuário
-    if len(dados_editados) < len(df_exibicao):
-        ids_antes = set(df_exibicao['ID'])
-        ids_depois = set(dados_editados['ID'])
-        ids_deletados = ids_antes - ids_depois
-        
-        for id_deletado in ids_deletados:
-            deletar_item(id_deletado)
+    if "editor_compras" in st.session_state:
+        linhas_deletadas = st.session_state["editor_compras"].get("deleted_rows", [])
+        if linhas_deletadas:
+            for indice_linha in linhas_deletadas:
+                id_deletado = int(df_exibicao.iloc[indice_linha]['ID'])
+                try:
+                    supabase.table("compras").delete().eq("id", id_deletado).execute()
+                except Exception as e:
+                    st.error(f"Erro ao deletar: {e}")
             
-        st.success("Item removido com sucesso!")
-        st.rerun()
+            st.success("Item removido do seu histórico!")
+            st.rerun()
 else:
-    st.info("Nenhuma compra cadastrada ainda. Comece preenchendo o formulário acima!")
+    st.info("Nenhuma compra registrada ainda.")
