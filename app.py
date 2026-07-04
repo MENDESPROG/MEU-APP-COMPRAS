@@ -16,28 +16,19 @@ def inicializar_supabase() -> Client:
 
 supabase = inicializar_supabase()
 
-# --- 3. GERENCIAMENTO DE SESSÃO / AUTENTICAÇÃO ---
-def obter_usuario_logado():
-    try:
-        resposta = supabase.auth.get_user()
-        if resposta and hasattr(resposta, 'user') and resposta.user:
-            return resposta.user
-    except Exception:
-        return None
-    return None
+# --- 3. GERENCIAMENTO DE SESSÃO CUSTOMIZADO ---
+if "usuario_email" not in st.session_state:
+    st.session_state["usuario_email"] = None
 
-usuario = obter_usuario_logado()
-
-# --- 4. TELA DE LOGIN (E-MAIL E SENHA) ---
-if usuario is None:
+# --- 4. TELA DE LOGIN (BANCO DE DADOS CUSTOMIZADO) ---
+if st.session_state["usuario_email"] is None:
     st.title("🔐 Acesse seu Controle de Compras")
     st.write("Faça login ou crie uma conta rápida abaixo para gerenciar seus gastos.")
     
-    # Cria duas abas limpas na tela: uma para entrar e outra para se cadastrar
     aba_login, aba_cadastro = st.tabs(["Entrar na Conta", "Criar Nova Conta"])
     
     with aba_login:
-        email = st.text_input("E-mail:", placeholder="seu@email.com", key="login_email")
+        email = st.text_input("E-mail:", placeholder="seu@email.com", key="login_email").strip().lower()
         senha = st.text_input("Senha:", type="password", key="login_senha")
         
         if st.button("Entrar", use_container_width=True):
@@ -45,51 +36,51 @@ if usuario is None:
                 st.warning("Por favor, preencha todos os campos.")
             else:
                 try:
-                    supabase.auth.sign_in_with_password({"email": email, "password": senha})
-                    st.success("✓ Login realizado com sucesso!")
-                    st.rerun()  # Recarrega o app já autenticado
+                    # Busca o usuário na nossa tabela customizada
+                    busca = supabase.table("usuarios_app").select("*").eq("email", email).eq("senha", senha).execute()
+                    if busca.data:
+                        st.session_state["usuario_email"] = email
+                        st.success("✓ Login realizado com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("E-mail ou senha incorretos. Tente novamente.")
                 except Exception as e:
-                    st.error("E-mail ou senha incorretos. Tente novamente.")
+                    st.error(f"Erro ao conectar com o banco: {e}")
                 
     with aba_cadastro:
-        novo_email = st.text_input("Escolha um E-mail:", placeholder="exemplo@email.com", key="reg_email")
+        novo_email = st.text_input("Escolha um E-mail:", placeholder="exemplo@email.com", key="reg_email").strip().lower()
         nova_senha = st.text_input("Escolha uma Senha (mín. 6 dígitos):", type="password", key="reg_senha")
         
-        if st.button("Cadastrar Nova Conta", use_container_width=True):
+        if st.button("Cadastrar e Entrar", use_container_width=True):
             if not novo_email or not nova_senha:
                 st.warning("Por favor, preencha todos os campos para o cadastro.")
             elif len(nova_senha) < 6:
                 st.error("A senha deve ter pelo menos 6 caracteres.")
             else:
                 try:
-                    # Cria a conta forçando o Supabase a não exigir/enviar e-mails de validação de forma síncrona
-                    supabase.auth.sign_up({
-                        "email": novo_email, 
-                        "password": nova_senha,
-                        "options": {"should_create_user": True}
-                    })
+                    # Tenta inserir o novo usuário na tabela customizada
+                    dados_usuario = {"email": novo_email, "senha": nova_senha}
+                    supabase.table("usuarios_app").insert(dados_usuario).execute()
                     
+                    # Loga o usuário automaticamente
+                    st.session_state["usuario_email"] = novo_email
                     st.success("✨ Conta criada com sucesso!")
-                    st.info("👉 Agora, vá para a aba **'Entrar na Conta'** ao lado e insira suas credenciais para acessar!")
+                    st.rerun()
                 except Exception as e:
-                    # Fallback caso o servidor ainda retorne mensagens de limite de e-mail integrado
-                    if "rate limit" in str(e).lower() or "not confirmed" in str(e).lower():
-                        st.success("✨ Conta criada com sucesso!")
-                        st.info("👉 Prontinho! Vá para a aba **'Entrar na Conta'** ao lado para fazer seu login.")
+                    if "duplicate key" in str(e).lower() or "already exists" in str(e).lower():
+                        st.error("Este e-mail já está cadastrado! Use a aba de Login.")
                     else:
                         st.error(f"Erro ao cadastrar: {e}")
                 
-    st.stop()  # Impede que o restante do app execute se não estiver logado
+    st.stop()
 
 # --- 5. PAINEL DO USUÁRIO AUTENTICADO ---
+usuario_atual = st.session_state["usuario_email"]
+
 with st.sidebar:
-    if usuario and hasattr(usuario, 'email'):
-        st.write(f"Conectado como: \n**{usuario.email}**")
-    else:
-        st.write("Usuário conectado")
-        
+    st.write(f"Conectado como: \n**{usuario_atual}**")
     if st.button("Sair / Mudar de Conta", use_container_width=True):
-        supabase.auth.sign_out()
+        st.session_state["usuario_email"] = None
         st.rerun()
 
 st.title("🛒 Meu Histórico de Compras Inteligente")
@@ -124,7 +115,7 @@ if botao_cadastrar:
             "categoria": categoria,
             "supermercado": supermercado,
             "data_compra": str(data_compra),
-            "user_id": usuario.id
+            "user_id": usuario_atual  # Armazena o e-mail do usuário como identificador único
         }
         
         try:
@@ -139,7 +130,51 @@ st.write("---")
 st.subheader("📊 Meu Histórico de Compras")
 
 try:
-    resposta = supabase.table("compras").select("*").eq("user_id", usuario.id).order("data_compra", desc=True).execute()
+    resposta = supabase.table("compras").select("*").eq("user_id", usuario_atual).order("data_compra", desc=True).execute()
     dados_banco = resposta.data
 except Exception as e:
     st.error(f"Erro ao buscar dados do Supabase: {e}")
+    dados_banco = []
+
+df = pd.DataFrame(dados_banco)
+
+if not df.empty:
+    df['Total'] = df['valor_unitario'] * df['quantidade']
+    total_gasto = df['Total'].sum()
+    total_itens = df['quantidade'].sum()
+    
+    col_m1, col_m2 = st.columns(2)
+    col_m1.metric("Total Investido", f"R$ {total_gasto:.2f}")
+    col_m2.metric("Qtd. Itens Comprados", f"{total_itens} un.")
+    
+    df_exibicao = df.rename(columns={
+        'id': 'ID', 'produto': 'Produto', 'valor_unitario': 'Preço Unitário',
+        'quantidade': 'Qtd', 'categoria': 'Categoria', 'supermercado': 'Supermercado',
+        'data_compra': 'Data'
+    })
+    
+    st.info("💡 **Como apagar um item:** Selecione a linha desejada na tabela abaixo e aperte a tecla **Delete**.")
+    
+    dados_editados = st.data_editor(
+        df_exibicao[['ID', 'Produto', 'Preço Unitário', 'Qtd', 'Total', 'Categoria', 'Supermercado', 'Data']],
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        disabled=["ID", "Produto", "Preço Unitário", "Qtd", "Total", "Categoria", "Supermercado", "Data"],
+        key="editor_compras"
+    )
+    
+    if "editor_compras" in st.session_state:
+        linhas_deletadas = st.session_state["editor_compras"].get("deleted_rows", [])
+        if linhas_deletadas:
+            for indice_linha in linhas_deletadas:
+                id_deletado = int(df_exibicao.iloc[indice_linha]['ID'])
+                try:
+                    supabase.table("compras").delete().eq("id", id_deletado).execute()
+                except Exception as e:
+                    st.error(f"Erro ao deletar: {e}")
+            
+            st.success("Item removido do seu histórico!")
+            st.rerun()
+else:
+    st.info("Nenhuma compra registrada ainda.")
